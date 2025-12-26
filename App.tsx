@@ -97,6 +97,9 @@ const App: React.FC = () => {
       try {
           const user = await userService.checkSession();
           setCurrentUser(user);
+          if (user && user.history) {
+              setImageHistory(user.history);
+          }
       } catch (e) {
           console.error("Auth check failed", e);
       } finally {
@@ -192,7 +195,10 @@ const App: React.FC = () => {
       if (currentUser) {
           try {
              await userService.saveUserImage(currentUser, newImage);
-             await userService.logUsage('可視化引擎', totalTokens);
+             const usageResult = await userService.logUsage('可視化引擎', totalTokens);
+             if (usageResult.remainingTokens !== undefined) {
+                updateCurrentUser({ tokens: usageResult.remainingTokens });
+             }
           } catch (e) {
               console.error("Failed to save to cloud history", e);
           }
@@ -240,7 +246,10 @@ const App: React.FC = () => {
 
       if (currentUser) {
         await userService.saveUserImage(currentUser, newImage);
-        await userService.logUsage('可視化引擎', editResult.usage);
+        const usageResult = await userService.logUsage('可視化引擎', editResult.usage);
+        if (usageResult.remainingTokens !== undefined) {
+            updateCurrentUser({ tokens: usageResult.remainingTokens });
+        }
       }
 
     } catch (err: any) {
@@ -473,7 +482,7 @@ const App: React.FC = () => {
 
         {/* VIEW: USER PROFILE */}
         {currentView === 'profile' && currentUser && (
-            <UserDashboard user={currentUser} onRestore={restoreImage} />
+            <UserDashboard user={currentUser} onRestore={restoreImage} onUpdateUser={updateCurrentUser} />
         )}
 
         {/* VIEW: NEW FEATURES */}

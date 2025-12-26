@@ -112,6 +112,7 @@ const initDb = async () => {
         contact_email VARCHAR(255),
         mobile VARCHAR(255),
         tokens BIGINT DEFAULT 100000,
+        avatar_r2_key VARCHAR(255),
         created_at BIGINT
       )
     `);
@@ -325,6 +326,68 @@ app.post('/api/auth/login', async (req, res) => {
     console.error("Login Error:", err);
     res.status(500).json({ message: `Login failed: ${err.message}` });
   }
+});
+
+// User: Update Profile
+app.put('/api/user/profile', authenticateToken, async (req, res) => {
+    const { displayName, contactEmail, mobile } = req.body;
+    try {
+        await pool.query(
+            'UPDATE users SET display_name = ?, contact_email = ?, mobile = ? WHERE id = ?',
+            [displayName, contactEmail, mobile, req.user.id]
+        );
+        res.json({ success: true, message: 'Profile updated successfully.' });
+    } catch (err) {
+        res.status(500).json({ message: `Profile update failed: ${err.message}` });
+    }
+});
+
+// User: Change Password
+app.put('/api/user/password', authenticateToken, async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    try {
+        const [users] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
+        const user = users[0];
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const match = await bcrypt.compare(currentPassword, user.password_hash);
+        if (!match) {
+            return res.status(400).json({ message: 'Invalid current password' });
+        }
+
+        const hash = await bcrypt.hash(newPassword, 10);
+        await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
+
+        res.json({ success: true, message: 'Password changed successfully.' });
+    } catch (err) {
+        res.status(500).json({ message: `Password change failed: ${err.message}` });
+    }
+});
+
+// User: Get Avatar Upload URL
+app.post('/api/user/avatar-upload-url', authenticateToken, async (req, res) => {
+    const { fileName, fileType } = req.body;
+    const key = `avatars/${req.user.id}/${Date.now()}-${fileName}`;
+
+    try {
+        const command = new PutObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: key,
+            ContentType: fileType,
+        });
+        const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 3600 }); // URL valid for 1 hour
+        
+        // Store the avatar key in the user's profile
+        await pool.query('UPDATE users SET avatar_r2_key = ? WHERE id = ?', [key, req.user.id]);
+
+        res.json({ success: true, uploadUrl, key });
+    } catch (err) {
+        console.error('Avatar upload URL error:', err);
+        res.status(500).json({ message: `Could not get upload URL: ${err.message}` });
+    }
 });
 
 // Auth: Me (Session Check)
@@ -746,6 +809,7 @@ app.get('/api/admin/users', authenticateToken, async (req, res) => {
       created_at: parseInt(u.created_at),
       contactEmail: u.contact_email,
       mobile: u.mobile,
+      tokens: u.tokens,
       history: []
     }));
     res.json(users);

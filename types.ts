@@ -55,6 +55,7 @@ export interface User {
   expirationDate?: number; // Timestamp for account expiration
   tokens?: number;
   token?: string; // Auth token from login
+  avatarUrl?: string;
 }
 
 export interface AuthState {

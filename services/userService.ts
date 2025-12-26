@@ -249,6 +249,45 @@ export const userService = {
         });
     },
 
+    updateUserProfile: async (data: { displayName: string, contactEmail: string, mobile: string }) => {
+        const res = await fetch(`${API_BASE}/user/profile`, {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.message);
+        }
+        return await res.json();
+    },
+
+    changePassword: async (data: { currentPassword: string, newPassword: string }) => {
+        const res = await fetch(`${API_BASE}/user/password`, {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.message);
+        }
+        return await res.json();
+    },
+
+    getAvatarUploadUrl: async (fileName: string, fileType: string) => {
+        const res = await fetch(`${API_BASE}/user/avatar-upload-url`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify({ fileName, fileType })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.message);
+        }
+        return await res.json();
+    },
+
     deleteUser: async (uid: string) => {
         await fetch(`${API_BASE}/admin/users/${uid}`, {
             method: 'DELETE',
