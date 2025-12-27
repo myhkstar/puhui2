@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Modality } from '@google/genai';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 
 dotenv.config();
 
@@ -25,12 +25,9 @@ const PORT = process.env.PORT || 3000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // --- Gemini AI Client ---
-let genAI;
-if (GEMINI_API_KEY) {
-  console.log('✅ Initializing Gemini AI Client...');
-  genAI = new GoogleGenAI(GEMINI_API_KEY);
-} else {
-  console.warn('⚠️ WARNING: GEMINI_API_KEY is not set. AI features will be disabled.');
+// Calls are now proxied through /gemini-proxy to bypass server-side restrictions
+if (!GEMINI_API_KEY) {
+    console.warn('⚠️ WARNING: GEMINI_API_KEY is not set. AI features will be disabled.');
 }
 
 // --- Mock Database State (For Fallback) ---
@@ -189,16 +186,20 @@ const initDb = async () => {
     }
 
   } catch (err) {
-    console.error('❌ FATAL: Database Connection Failed. The application cannot start.');
+    console.error('❌ Database Connection Failed during initialization.');
     console.error('   Please check your network connection and the Aiven database status.');
     console.error('   Error details:', err.message);
-    process.exit(1); // Exit the process with a failure code
+    // Re-throw the error to be caught by the caller
+    throw err;
   } finally {
     if (connection) connection.release();
   }
 };
 
-initDb();
+// Initialize DB but don't crash the server if it fails on startup.
+initDb().catch(err => {
+    console.error('⚠️ Database initialization failed, but continuing to start server:', err.message);
+});
 
 // --- Middleware ---
 const authenticateToken = (req, res, next) => {
@@ -222,6 +223,36 @@ const signToken = (user) => {
 // --- Serve Frontend in Production ---
 const clientBuildPath = path.join(__dirname, 'dist');
 app.use(express.static(clientBuildPath));
+
+// --- Gemini API Reverse Proxy ---
+// Proxies requests from /gemini-proxy to the official Google API
+// This allows the frontend to bypass CORS and domain restrictions.
+const geminiProxy = createProxyMiddleware({
+    target: 'https://generativelanguage.googleapis.com',
+    changeOrigin: true,
+    pathRewrite: (path, req) => {
+        // First, remove the /gemini-proxy prefix
+        const newPath = path.replace(/^\/gemini-proxy/, '');
+        // The actual request to Google doesn't need the model name in the path like the SDK might assume
+        // It's all POST to /v1beta/models/MODEL:generateContent
+        return newPath;
+    },
+    onProxyReq: (proxyReq, req, res) => {
+        // Securely add the API key to the request before forwarding
+        if (GEMINI_API_KEY) {
+            const url = new URL(`https://generativelanguage.googleapis.com${proxyReq.path}`);
+            if (!url.searchParams.has('key')) {
+                 url.searchParams.append('key', GEMINI_API_KEY);
+            }
+            proxyReq.path = `${url.pathname}${url.search}`;
+        }
+        // The body is already stringified JSON from the client, so we just pass it through.
+    },
+    logLevel: 'info' // Optional: for debugging proxy requests
+});
+
+app.use('/gemini-proxy', geminiProxy);
+
 
 // --- Routes ---
 
@@ -1001,7 +1032,7 @@ const getStyleInstruction = (style) => {
 };
 
 app.post('/api/gemini/research', authenticateToken, async (req, res) => {
-  if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+  if (!GEMINI_API_KEY) return res.status(503).json({ message: 'AI service is not available.' });
 
   const { topic, level, style, language, aspectRatio } = req.body;
 
@@ -1037,15 +1068,23 @@ app.post('/api/gemini/research', authenticateToken, async (req, res) => {
       [A highly detailed image generation prompt describing the visual composition, colors, and layout. The layout should be optimized for a ${aspectRatio} aspect ratio. END the prompt with this exact sentence: "All text, labels, and titles inside the image must be written in ${language}."]
     `;
 
-    const response = await genAI.models.generateContent({
-      model: TEXT_MODEL,
-      contents: systemPrompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-      },
+    const url = `http://127.0.0.1:${PORT}/gemini-proxy/v1beta/models/${TEXT_MODEL}:generateContent`;
+    const apiResponse = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            tools: [{ googleSearch: {} }],
+        })
     });
 
-    const text = response.text || "";
+    if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        throw new Error(`Gemini API error: ${apiResponse.status} ${errorText}`);
+    }
+    const response = await apiResponse.json();
+
+    const text = response.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const usage = response.usageMetadata?.totalTokenCount || 0;
     
     const factsMatch = text.match(/FACTS:\s*([\s\S]*?)(?=IMAGE_PROMPT:|$)/i);
@@ -1088,17 +1127,27 @@ app.post('/api/gemini/research', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/gemini/generate-image', authenticateToken, async (req, res) => {
-  if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+  if (!GEMINI_API_KEY) return res.status(503).json({ message: 'AI service is not available.' });
   const { prompt, aspectRatio } = req.body;
   try {
-    const response = await genAI.models.generateContent({
-      model: IMAGE_MODEL,
-      contents: { parts: [{ text: prompt }] },
-      config: {
-        responseModalities: [Modality.IMAGE],
-        imageConfig: { aspectRatio: aspectRatio },
-      }
+    const url = `http://127.0.0.1:${PORT}/gemini-proxy/v1beta/models/${IMAGE_MODEL}:generateContent`;
+    const apiResponse = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+                responseMimeType: "image/png",
+            }
+        })
     });
+
+    if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        throw new Error(`Gemini API error: ${apiResponse.status} ${errorText}`);
+    }
+    const response = await apiResponse.json();
+
     const usage = response.usageMetadata?.totalTokenCount || 0;
     const part = response.candidates?.[0]?.content?.parts?.[0];
     if (part && part.inlineData && part.inlineData.data) {
@@ -1116,22 +1165,34 @@ app.post('/api/gemini/generate-image', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/gemini/edit-image', authenticateToken, async (req, res) => {
-  if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+  if (!GEMINI_API_KEY) return res.status(503).json({ message: 'AI service is not available.' });
   const { currentImageInput, editInstruction } = req.body;
   try {
     const cleanBase64 = currentImageInput.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
-    const response = await genAI.models.generateContent({
-      model: EDIT_MODEL,
-      contents: {
-        parts: [
-           { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-           { text: editInstruction }
-        ]
-      },
-      config: {
-        responseModalities: [Modality.IMAGE],
-      }
+    
+    const url = `http://127.0.0.1:${PORT}/gemini-proxy/v1beta/models/${EDIT_MODEL}:generateContent`;
+    const apiResponse = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{
+                parts: [
+                   { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+                   { text: editInstruction }
+                ]
+            }],
+            generationConfig: {
+                responseMimeType: "image/png",
+            }
+        })
     });
+
+    if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        throw new Error(`Gemini API error: ${apiResponse.status} ${errorText}`);
+    }
+    const response = await apiResponse.json();
+
     const usage = response.usageMetadata?.totalTokenCount || 0;
     const part = response.candidates?.[0]?.content?.parts?.[0];
     if (part && part.inlineData && part.inlineData.data) {
@@ -1149,7 +1210,7 @@ app.post('/api/gemini/edit-image', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/gemini/generate-simple-image', authenticateToken, async (req, res) => {
-  if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+  if (!GEMINI_API_KEY) return res.status(503).json({ message: 'AI service is not available.' });
   const { prompt, images } = req.body;
   try {
     const parts = [{ text: prompt }];
@@ -1159,10 +1220,25 @@ app.post('/api/gemini/generate-simple-image', authenticateToken, async (req, res
            inlineData: { mimeType: 'image/png', data: clean }
        });
     }
-    const response = await genAI.models.generateContent({
-        model: SIMPLE_IMAGE_MODEL,
-        contents: { parts: parts },
+    
+    const url = `http://127.0.0.1:${PORT}/gemini-proxy/v1beta/models/${SIMPLE_IMAGE_MODEL}:generateContent`;
+    const apiResponse = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: parts }],
+            generationConfig: {
+                responseMimeType: "image/png",
+            }
+        })
     });
+
+    if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        throw new Error(`Gemini API error: ${apiResponse.status} ${errorText}`);
+    }
+    const response = await apiResponse.json();
+
     const usage = response.usageMetadata?.totalTokenCount || 0;
     const partsOut = response.candidates?.[0]?.content?.parts;
     if (partsOut) {
@@ -1183,7 +1259,7 @@ app.post('/api/gemini/generate-simple-image', authenticateToken, async (req, res
 });
 
 app.post('/api/gemini/chat', authenticateToken, async (req, res) => {
-  if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+  if (!GEMINI_API_KEY) return res.status(503).json({ message: 'AI service is not available.' });
   const { history, newMessage, modelName, attachments } = req.body;
   try {
     const systemInstruction = `
@@ -1204,21 +1280,38 @@ app.post('/api/gemini/chat', authenticateToken, async (req, res) => {
         role: h.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: h.content }]
     }));
-    const chat = genAI.chats.create({
-        model: modelName,
-        history: formattedHistory,
-        config: { systemInstruction }
-    });
-    const parts = [{ text: newMessage }];
+    
+    const userMessageParts = [{ text: newMessage }];
     if (attachments && attachments.length > 0) {
         for (const file of attachments) {
-            parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
+            userMessageParts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
         }
     }
-    const result = await chat.sendMessage({ message: parts });
+
+    const contents = [...formattedHistory, { role: 'user', parts: userMessageParts }];
+    const url = `http://127.0.0.1:${PORT}/gemini-proxy/v1beta/models/${modelName}:generateContent`;
+
+    const apiResponse = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: contents,
+            systemInstruction: { parts: [{ text: systemInstruction }] }
+        })
+    });
+
+    if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        throw new Error(`Gemini API error: ${apiResponse.status} ${errorText}`);
+    }
+    const result = await apiResponse.json();
+
+    const content = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const usage = result.usageMetadata?.totalTokenCount || 0;
+
     res.json({
-        content: result.text || "",
-        usage: result.usageMetadata?.totalTokenCount || 0
+        content: content,
+        usage: usage
     });
   } catch (error) {
     console.error('Gemini chat error:', error);
@@ -1227,15 +1320,28 @@ app.post('/api/gemini/chat', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/gemini/generate-title', authenticateToken, async (req, res) => {
-  if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+  if (!GEMINI_API_KEY) return res.status(503).json({ message: 'AI service is not available.' });
   const { text } = req.body;
   try {
     const systemPrompt = `You are a title generator. Your task is to create a very short, concise, and descriptive title (max 5 words, in the same language as the input) for the following user message. Do not add quotes or any other formatting.`;
-    const response = await genAI.models.generateContent({
-        model: 'gemini-1.5-flash-latest',
-        contents: `${systemPrompt}\n\nUser Message: "${text}"\n\nTitle:`,
+    const fullPrompt = `${systemPrompt}\n\nUser Message: "${text}"\n\nTitle:`;
+    
+    const url = `http://127.0.0.1:${PORT}/gemini-proxy/v1beta/models/gemini-1.5-flash-latest:generateContent`;
+    const apiResponse = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: fullPrompt }] }]
+        })
     });
-    const title = response.text?.trim().replace(/"/g, '') || text.substring(0, 20);
+
+    if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        throw new Error(`Gemini API error: ${apiResponse.status} ${errorText}`);
+    }
+    const response = await apiResponse.json();
+
+    const title = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim().replace(/"/g, '') || text.substring(0, 20);
     res.json({ title });
   } catch (error) {
     console.error('Gemini title generation error:', error);
@@ -1244,22 +1350,34 @@ app.post('/api/gemini/generate-title', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/gemini/beautify-image', authenticateToken, async (req, res) => {
-    if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+    if (!GEMINI_API_KEY) return res.status(503).json({ message: 'AI service is not available.' });
     const { image, prompt } = req.body;
     try {
         const cleanBase64 = image.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
-        const response = await genAI.models.generateContent({
-            model: EDIT_MODEL,
-            contents: {
-                parts: [
-                    { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-                    { text: prompt }
-                ]
-            },
-            config: {
-                responseModalities: [Modality.IMAGE],
-            }
+        
+        const url = `http://127.0.0.1:${PORT}/gemini-proxy/v1beta/models/${EDIT_MODEL}:generateContent`;
+        const apiResponse = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [
+                        { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+                        { text: prompt }
+                    ]
+                }],
+                generationConfig: {
+                    responseMimeType: "image/png",
+                }
+            })
         });
+
+        if (!apiResponse.ok) {
+            const errorText = await apiResponse.text();
+            throw new Error(`Gemini API error: ${apiResponse.status} ${errorText}`);
+        }
+        const response = await apiResponse.json();
+        
         const usage = response.usageMetadata?.totalTokenCount || 0;
         const part = response.candidates?.[0]?.content?.parts?.[0];
         if (part && part.inlineData && part.inlineData.data) {
