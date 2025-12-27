@@ -20,7 +20,7 @@ import AdminDashboard from './components/AdminDashboard';
 import UserDashboard from './components/UserDashboard';
 import ImageGenerator from './components/ImageGenerator';
 import AIAssistant from './components/AIAssistant';
-import ExternalTool from './components/ExternalTool';
+import SmartTools from './components/ExternalTool';
 // Fixed missing Lightbulb icon import
 import { Search, AlertCircle, History, GraduationCap, Palette, Microscope, Atom, Compass, Globe, Sun, Moon, Key, CreditCard, ExternalLink, DollarSign, User as UserIcon, LogOut, Shield, Image, BookOpen, FileText, BarChart, MessageSquare, ArrowRight, Layout, Info, Lightbulb, Cpu } from 'lucide-react';
 
@@ -406,7 +406,6 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-2 md:gap-3">
               <div className="hidden lg:flex items-center gap-2 mr-2">
-                  <NavButton icon={Image} label="圖片生成" view="image-gen" />
                   <NavButton icon={GraduationCap} label="中學生AI" view="student-ai" />
                   <NavButton icon={FileText} label="智能工具" view="smart-tools" />
                   <NavButton icon={BarChart} label="可視化引擎" view="home" />
@@ -464,7 +463,6 @@ const App: React.FC = () => {
         
         {/* Mobile Navigation */}
         <div className="lg:hidden flex items-center justify-between px-4 py-2 border-t border-slate-200 dark:border-white/10 overflow-x-auto gap-2">
-             <NavButton icon={Image} label="圖片" view="image-gen" />
              <NavButton icon={GraduationCap} label="中學生" view="student-ai" />
              <NavButton icon={FileText} label="工具" view="smart-tools" />
              <NavButton icon={BarChart} label="可視化" view="home" />
@@ -486,28 +484,11 @@ const App: React.FC = () => {
         )}
 
         {/* VIEW: NEW FEATURES */}
-        {currentView === 'image-gen' && <ImageGenerator user={currentUser} onUpdateUser={updateCurrentUser} />}
         {currentView === 'ai-assistant' && <AIAssistant user={currentUser} />}
-        {currentView === 'student-ai' && <ExternalTool url="https://students.puhui.ai" featureName="中學生AI" />}
+        {currentView === 'student-ai' && <SmartTools user={currentUser} onUpdateUser={updateCurrentUser} />}
         
         {/* VIEW: SMART TOOLS (Under Construction) */}
-        {currentView === 'smart-tools' && (
-             <div className="max-w-2xl mx-auto mt-20 flex flex-col items-center justify-center text-center space-y-8 animate-in fade-in zoom-in duration-500">
-                <div className="relative">
-                    <div className="absolute inset-0 bg-cyan-500/20 blur-3xl rounded-full"></div>
-                    <div className="relative p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl">
-                        <Cpu className="w-20 h-20 text-cyan-500" />
-                    </div>
-                </div>
-                
-                <div className="space-y-4">
-                    <h2 className="text-4xl font-display font-bold text-slate-900 dark:text-white">智能工具</h2>
-                    <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto text-lg">
-                        本區域正在建設中……
-                    </p>
-                </div>
-             </div>
-        )}
+        {currentView === 'smart-tools' && <SmartTools user={currentUser} onUpdateUser={updateCurrentUser} />}
 
         {/* VIEW: HOME / VISUALIZATION ENGINE */}
         {currentView === 'home' && (

@@ -64,3 +64,7 @@ export const generateTitleForText = async (text: string, token: string): Promise
     const result = await apiRequest('generate-title', { text }, token);
     return result.title;
 };
+
+export const beautifyImage = async (image: string, prompt: string, token: string): Promise<AIResponse> => {
+    return apiRequest('beautify-image', { image, prompt }, token);
+};

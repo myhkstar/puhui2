@@ -5,7 +5,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { User, GeneratedImage, UsageLog } from '../types';
 import { userService } from '../services/userService';
-import { History, User as UserIcon, Calendar, Download, Clock, Star, Shield, Activity, Coins, ChevronLeft, ChevronRight, Edit, Save, X, Camera } from 'lucide-react';
+import { History, User as UserIcon, Calendar, Download, Clock, Star, Shield, Activity, Coins, ChevronLeft, ChevronRight, Edit, Save, X, Camera, Loader2 } from 'lucide-react';
 
 interface UserDashboardProps {
     user: User;
@@ -17,6 +17,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user, onRestore, onUpdate
     const [usageLogs, setUsageLogs] = useState<UsageLog[]>([]);
     const [history, setHistory] = useState<GeneratedImage[]>([]);
     const [isEditing, setIsEditing] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
     const [formData, setFormData] = useState({
         displayName: user.displayName || '',
         contactEmail: user.contactEmail || '',
@@ -58,10 +59,17 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user, onRestore, onUpdate
     };
 
     const handleSave = async () => {
+        setIsSaving(true);
         try {
-            // Handle avatar upload first
+            let newAvatarUrl = user.avatarUrl;
+
+            // 1. Handle avatar upload first if a new file is selected
             if (avatarFile) {
-                const { uploadUrl } = await userService.getAvatarUploadUrl(avatarFile.name, avatarFile.type);
+                // The backend should return the final URL of the uploaded image
+                const response = await userService.getAvatarUploadUrl(avatarFile.name, avatarFile.type);
+                const uploadUrl = response.uploadUrl;
+                newAvatarUrl = response.finalUrl; // Assuming the service returns the final URL
+
                 await fetch(uploadUrl, {
                     method: 'PUT',
                     body: avatarFile,
@@ -69,11 +77,16 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user, onRestore, onUpdate
                 });
             }
 
-            // Handle profile data update
-            await userService.updateUserProfile(formData);
+            // 2. Prepare the complete user profile data
+            const profileToUpdate = {
+                ...formData,
+                avatarUrl: newAvatarUrl,
+            };
 
-            // Refetch user data to get all updates
-            const updatedUser = await userService.checkSession();
+            // 3. Update the profile with all data at once
+            const updatedUser = await userService.updateUserProfile(profileToUpdate);
+
+            // 4. Update the local state with the returned user data
             if (updatedUser) {
                 onUpdateUser(updatedUser);
             }
@@ -81,7 +94,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user, onRestore, onUpdate
             setIsEditing(false);
         } catch (error) {
             console.error("Failed to save profile:", error);
-            // You should show an error message to the user here
+            alert("個人資料儲存失敗，請稍後再試。");
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -205,11 +220,22 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user, onRestore, onUpdate
                 <div className="flex flex-col gap-2">
                     {isEditing ? (
                         <>
-                            <button onClick={handleSave} className="px-4 py-2 bg-green-500 text-white rounded-lg flex items-center gap-2"><Save className="w-4 h-4" /> 保存</button>
-                            <button onClick={handleEditToggle} className="px-4 py-2 bg-gray-500 text-white rounded-lg flex items-center gap-2"><X className="w-4 h-4" /> 取消</button>
+                            <button 
+                                onClick={handleSave} 
+                                disabled={isSaving}
+                                className="px-4 py-2 bg-green-500 text-white rounded-lg flex items-center justify-center gap-2 disabled:bg-green-300"
+                            >
+                                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                {isSaving ? '儲存中...' : '保存'}
+                            </button>
+                            <button onClick={handleEditToggle} disabled={isSaving} className="px-4 py-2 bg-gray-500 text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-50">
+                                <X className="w-4 h-4" /> 取消
+                            </button>
                         </>
                     ) : (
-                        <button onClick={handleEditToggle} className="px-4 py-2 bg-cyan-500 text-white rounded-lg flex items-center gap-2"><Edit className="w-4 h-4" /> 編輯個人資料</button>
+                        <button onClick={handleEditToggle} className="px-4 py-2 bg-cyan-500 text-white rounded-lg flex items-center gap-2">
+                            <Edit className="w-4 h-4" /> 編輯個人資料
+                        </button>
                     )}
                 </div>
 

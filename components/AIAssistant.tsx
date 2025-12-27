@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useContext } from 'react';
 import { userService } from '../services/userService';
 import { chatWithGemini, generateTitleForText } from '../services/geminiService';
 import { ChatMessage, ChatSession, User } from '../types';
-import { Send, Trash2, Plus, MessageSquare, Paperclip, Loader2, Bot, User as UserIcon, Menu, Cpu, Zap, BrainCircuit, Lock, Edit2, Check } from 'lucide-react';
+import { Send, Trash2, Plus, MessageSquare, Paperclip, Loader2, Bot, User as UserIcon, Menu, Cpu, Zap, BrainCircuit, Lock, Edit2, Check, Copy } from 'lucide-react';
 import { AuthContext } from '../App';
 
 interface AIAssistantProps {
@@ -21,12 +21,20 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user: currentUser }) => {
     const [loading, setLoading] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [chatMode, setChatMode] = useState<'light' | 'deep'>('light');
+    const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    const handleCopy = (content: string, id: string) => {
+        navigator.clipboard.writeText(content).then(() => {
+            setCopiedMessageId(id);
+            setTimeout(() => setCopiedMessageId(null), 2000);
+        });
+    };
 
     useEffect(() => {
         loadSessions();
         // Log usage on mount (without tokens, just access log)
-        userService.logUsage('AI助手', 0);
+        userService.logUsage('深聊浅谈', 0);
     }, []);
 
     useEffect(() => {
@@ -197,7 +205,7 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user: currentUser }) => {
             );
 
             await userService.saveChatMessage(sessionId, 'model', aiResponse.content);
-            const usageResult = await userService.logUsage('AI助手', aiResponse.usage);
+            const usageResult = await userService.logUsage('深聊浅谈', aiResponse.usage);
             if (usageResult.remainingTokens !== undefined) {
                 updateCurrentUser({ tokens: usageResult.remainingTokens });
             }
@@ -274,7 +282,7 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user: currentUser }) => {
                             <Menu className="w-5 h-5 text-slate-500" />
                         </button>
                         <span className="font-bold text-slate-700 dark:text-slate-200 truncate">
-                            {sessions.find(s => s.id === currentSessionId)?.title || "AI 助手 - 普普"}
+                            {sessions.find(s => s.id === currentSessionId)?.title || "深聊浅谈 - 普普"}
                         </span>
                     </div>
 
@@ -310,22 +318,30 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user: currentUser }) => {
                             <p>你好！我是普普，當前處於 <span className="font-bold text-cyan-500">{chatMode === 'light' ? '輕聊模式' : '深研模式'}</span> 為您服務。</p>
                         </div>
                     ) : (
-                        messages.map((msg, idx) => (
-                            <div key={idx} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-slate-200 dark:bg-slate-700' : 'bg-cyan-100 dark:bg-cyan-900/50'}`}>
-                                    {msg.role === 'user' ? <UserIcon className="w-5 h-5 text-slate-600 dark:text-slate-300" /> : <Bot className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />}
-                                </div>
-                                <div className={`max-w-[80%] p-4 rounded-2xl ${
-                                    msg.role === 'user' 
-                                    ? 'bg-cyan-600 text-white rounded-tr-none' 
-                                    : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 shadow-sm rounded-tl-none border border-slate-200 dark:border-slate-700'
-                                }`}>
-                                    <div className="whitespace-pre-wrap leading-relaxed text-sm">
-                                        {msg.content}
+                        messages.map((msg, idx) => {
+                            const messageId = `${idx}-${msg.timestamp}`;
+                            return (
+                                <div key={idx} className={`group flex items-start gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-slate-200 dark:bg-slate-700' : 'bg-cyan-100 dark:bg-cyan-900/50'}`}>
+                                        {msg.role === 'user' ? <UserIcon className="w-5 h-5 text-slate-600 dark:text-slate-300" /> : <Bot className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />}
+                                    </div>
+                                    <div className={`relative max-w-[80%] p-4 rounded-2xl ${
+                                        msg.role === 'user' 
+                                        ? 'bg-cyan-600 text-white rounded-tr-none' 
+                                        : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 shadow-sm rounded-tl-none border border-slate-200 dark:border-slate-700'
+                                    }`}>
+                                        <div className="whitespace-pre-wrap leading-relaxed text-sm">
+                                            {msg.content}
+                                        </div>
+                                    </div>
+                                    <div className="self-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => handleCopy(msg.content, messageId)} className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg">
+                                            {copiedMessageId === messageId ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+                                        </button>
                                     </div>
                                 </div>
-                            </div>
-                        ))
+                            );
+                        })
                     )}
                     {loading && (
                          <div className="flex gap-4 animate-pulse">
