@@ -1239,12 +1239,52 @@ app.post('/api/gemini/generate-title', authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/api/gemini/beautify-image', authenticateToken, async (req, res) => {
+    if (!genAI) return res.status(503).json({ message: 'AI service is not available.' });
+    const { image, prompt } = req.body;
+    try {
+        const cleanBase64 = image.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
+        const response = await genAI.models.generateContent({
+            model: EDIT_MODEL,
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+                    { text: prompt }
+                ]
+            },
+            config: {
+                responseModalities: [Modality.IMAGE],
+            }
+        });
+        const usage = response.usageMetadata?.totalTokenCount || 0;
+        const part = response.candidates?.[0]?.content?.parts?.[0];
+        if (part && part.inlineData && part.inlineData.data) {
+            res.json({
+                content: `data:image/png;base64,${part.inlineData.data}`,
+                usage: usage
+            });
+        } else {
+            throw new Error("Failed to beautify image from API response");
+        }
+    } catch (error) {
+        console.error('Gemini image beautify error:', error);
+        res.status(500).json({ message: 'An error occurred during image beautification.' });
+    }
+});
+
 
 // --- Serve Frontend in Production ---
-app.use(express.static(path.join(__dirname, 'dist')));
+const clientBuildPath = path.join(__dirname, 'dist');
+app.use(express.static(clientBuildPath));
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// Serve the frontend for any non-API, non-file requests
+app.get(/^(?!\/api).*/, (req, res) => {
+    const indexPath = path.join(clientBuildPath, 'index.html');
+    res.sendFile(indexPath, (err) => {
+        if (err) {
+            res.status(500).send(err);
+        }
+    });
 });
 
 app.listen(PORT, () => {
