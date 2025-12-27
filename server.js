@@ -219,6 +219,10 @@ const signToken = (user) => {
   return jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
 };
 
+// --- Serve Frontend in Production ---
+const clientBuildPath = path.join(__dirname, 'dist');
+app.use(express.static(clientBuildPath));
+
 // --- Routes ---
 
 // Auth: Register
@@ -1271,11 +1275,6 @@ app.post('/api/gemini/beautify-image', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'An error occurred during image beautification.' });
     }
 });
-
-
-// --- Serve Frontend in Production ---
-const clientBuildPath = path.join(__dirname, 'dist');
-app.use(express.static(clientBuildPath));
 
 // Serve the frontend for any non-API, non-file requests
 app.get(/^(?!\/api).*/, (req, res) => {
